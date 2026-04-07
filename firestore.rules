@@ -1,0 +1,117 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: userId (UID)
+    // Fields:
+    //   - uid: string
+    //   - email: string
+    //   - username: string
+    //
+    // Collection: games
+    // Document ID: gameId
+    // Fields:
+    //   - name: string
+    //   - masterId: string
+    //   - players: list (UIDs)
+    //
+    // Collection: sheets
+    // Document ID: sheetId
+    // Fields:
+    //   - gameId: string
+    //   - playerId: string | null
+    //   - type: 'player' | 'npc'
+    //   - class: string
+    //   - header: map
+    //   - stats: map
+    //   - defense: map
+    //   - health: map
+    //   - experience: list
+    //   - inventory: string
+    //   - notes: string
+    //
+    // ===============================================================
+
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && 
+             (request.auth.token.email == "alexandertg.busse@gmail.com" && request.auth.token.email_verified == true);
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function getGame(gameId) {
+      return get(/databases/$(database)/documents/games/$(gameId)).data;
+    }
+
+    function isGameMaster(gameId) {
+      return isAuthenticated() && getGame(gameId).masterId == request.auth.uid;
+    }
+
+    function isGameParticipant(gameId) {
+      let game = getGame(gameId);
+      return isAuthenticated() && (game.masterId == request.auth.uid || request.auth.uid in game.players);
+    }
+
+    // Rules
+    match /users/{userId} {
+      // Users can read their own profile. Admins can read all.
+      allow read: if isOwner(userId) || isAdmin();
+      // Allow querying users by username for the invite system.
+      // We limit this to prevent bulk downloading of user data.
+      allow list: if isAuthenticated() && (isAdmin() || (request.query.limit == 1 && request.query.offset == 0));
+      
+      allow create: if isOwner(userId) || isAdmin();
+      allow update: if isOwner(userId) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /games/{gameId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isGameMaster(gameId) || isAdmin() || (
+        isAuthenticated() && 
+        request.auth.uid in resource.data.players &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['players'])
+      );
+      allow delete: if isGameMaster(gameId) || isAdmin();
+    }
+
+    match /sheets/{sheetId} {
+      allow read: if isAuthenticated() && (
+        resource.data.playerId == request.auth.uid || 
+        isGameMaster(resource.data.gameId) ||
+        isGameParticipant(resource.data.gameId) ||
+        isAdmin()
+      );
+
+      allow create: if isAuthenticated() && (
+        isGameMaster(request.resource.data.gameId) || 
+        (request.resource.data.playerId == request.auth.uid && request.resource.data.type == "player") ||
+        isAdmin()
+      );
+
+      allow update: if isAuthenticated() && (
+        resource.data.playerId == request.auth.uid || 
+        isGameMaster(resource.data.gameId) || 
+        isAdmin()
+      );
+
+      allow delete: if isAuthenticated() && (
+        resource.data.playerId == request.auth.uid || 
+        isGameMaster(resource.data.gameId) || 
+        isAdmin()
+      );
+    }
+  }
+}

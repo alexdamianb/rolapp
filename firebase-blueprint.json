@@ -1,0 +1,102 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "A user of the application",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "The unique ID of the user" },
+        "email": { "type": "string", "format": "email", "description": "The user's email address" },
+        "username": { "type": "string", "description": "The user's unique nickname" }
+      },
+      "required": ["uid", "email", "username"]
+    },
+    "Game": {
+      "title": "Game",
+      "description": "An RPG game session",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "The name of the game" },
+        "masterId": { "type": "string", "description": "The UID of the game master" },
+        "players": { "type": "array", "items": { "type": "string" }, "description": "List of player UIDs" }
+      },
+      "required": ["name", "masterId"]
+    },
+    "Sheet": {
+      "title": "Sheet",
+      "description": "A character sheet for a player in a game",
+      "type": "object",
+      "properties": {
+        "gameId": { "type": "string" },
+        "playerId": { "type": "string", "description": "UID of the player who owns this sheet. Null for unassigned NPC." },
+        "type": { "type": "string", "enum": ["player", "npc"] },
+        "class": { "type": "string" },
+        "header": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "pronouns": { "type": "string" },
+            "heritage": { "type": "string" },
+            "subclass": { "type": "string" },
+            "level": { "type": "number" }
+          }
+        },
+        "stats": {
+          "type": "object",
+          "properties": {
+            "agility": { "type": "number" },
+            "strength": { "type": "number" },
+            "finesse": { "type": "number" },
+            "instinct": { "type": "number" },
+            "presence": { "type": "number" },
+            "knowledge": { "type": "number" }
+          }
+        },
+        "defense": {
+          "type": "object",
+          "properties": {
+            "evasion": { "type": "number" },
+            "armor": { "type": "number" }
+          }
+        },
+        "health": {
+          "type": "object",
+          "properties": {
+            "hp": { "type": "number" },
+            "hpMax": { "type": "number" },
+            "stress": { "type": "number" },
+            "stressMax": { "type": "number" },
+            "hope": { "type": "number" },
+            "hopeMax": { "type": "number" },
+            "thresholds": {
+              "type": "object",
+              "properties": {
+                "minor": { "type": "number" },
+                "major": { "type": "number" },
+                "severe": { "type": "number" }
+              }
+            }
+          }
+        },
+        "experience": { "type": "array", "items": { "type": "string" } },
+        "inventory": { "type": "string" },
+        "notes": { "type": "string" }
+      },
+      "required": ["gameId", "type", "class"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/games/{gameId}": {
+      "schema": "Game",
+      "description": "Game sessions"
+    },
+    "/sheets/{sheetId}": {
+      "schema": "Sheet",
+      "description": "Character sheets"
+    }
+  }
+}

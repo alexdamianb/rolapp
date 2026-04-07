@@ -1,0 +1,5 @@
+{
+  "name": "RolApp - Fichas de Personaje",
+  "description": "Una aplicación para gestionar partidas de rol y fichas de personaje en tiempo real.",
+  "requestFramePermissions": []
+}
