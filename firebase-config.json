@@ -1,3 +1,4 @@
+
 {
   "projectId": "gen-lang-client-0641922617",
   "appId": "1:1071156501349:web:4e0bacc78a246f2aae1f8c",
@@ -5,5 +6,6 @@
   "authDomain": "gen-lang-client-0641922617.firebaseapp.com",
   "storageBucket": "gen-lang-client-0641922617.firebasestorage.app",
   "messagingSenderId": "1071156501349",
-  "measurementId": ""
+  "measurementId": "",
+  "databaseURL": "https://gen-lang-client-0641922617-default-rtdb.europe-west1.firebasedatabase.app"
 }
