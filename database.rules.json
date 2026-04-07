@@ -3,23 +3,13 @@
     ".read": true,
     ".write": true,
     "users": {
-      "$userId": {
-        ".read": true,
-        ".write": true
-      }
+      ".indexOn": ["username"]
     },
     "games": {
-      "$gameId": {
-        ".read": true,
-        ".write": true
-      }
+      ".indexOn": ["gameId"]
     },
     "sheets": {
-      "$sheetId": {
-        ".read": true,
-        ".write": true,
-        ".indexOn": ["gameId"]
-      }
+      ".indexOn": ["gameId"]
     }
   }
 }
