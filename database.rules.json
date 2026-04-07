@@ -2,23 +2,20 @@
   "rules": {
     "users": {
       "$userId": {
-        ".read": "auth != null && (auth.uid == $userId || (auth.token.email == 'alexandertg.busse@gmail.com' && auth.token.email_verified == true))",
-        ".write": "auth != null && (auth.uid == $userId || (auth.token.email == 'alexandertg.busse@gmail.com' && auth.token.email_verified == true))",
-        ".indexOn": ["username"]
+        ".read": "auth != null && (auth.uid === $userId || (auth.token.email === 'alexandertg.busse@gmail.com' && auth.token.email_verified))",
+        ".write": "auth != null && (auth.uid === $userId || (auth.token.email === 'alexandertg.busse@gmail.com' && auth.token.email_verified))"
       }
     },
     "games": {
       "$gameId": {
         ".read": "auth != null",
-        ".write": "auth != null",
-        ".indexOn": ["masterId"]
+        ".write": "auth != null"
       }
     },
     "sheets": {
       "$sheetId": {
         ".read": "auth != null",
-        ".write": "auth != null",
-        ".indexOn": ["gameId", "playerId"]
+        ".write": "auth != null"
       }
     }
   }
