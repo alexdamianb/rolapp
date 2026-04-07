@@ -1,4 +1,4 @@
-import React, { useEffect, useState, Component } from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   onAuthStateChanged, 
@@ -6,23 +6,22 @@ import {
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword, 
   signOut,
+  sendEmailVerification,
   User as FirebaseUser
 } from 'firebase/auth';
 import { 
-  collection, 
+  ref, 
+  set, 
+  get, 
+  push, 
+  update, 
+  remove, 
+  onValue, 
   query, 
-  where, 
-  onSnapshot, 
-  doc, 
-  setDoc, 
-  getDoc, 
-  getDocs, 
-  addDoc, 
-  updateDoc,
-  deleteDoc,
-  orderBy,
-  limit
-} from 'firebase/firestore';
+  orderByChild, 
+  equalTo, 
+  limitToFirst
+} from 'firebase/database';
 import { auth, db, googleProvider } from './firebase';
 
 // --- Types ---
@@ -125,56 +124,7 @@ const IconMap: Record<string, any> = {
   Music, Leaf, Shield, Sword, Zap, Wand2, Ghost, Sun
 };
 
-enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
-}
-
-interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId: string | undefined;
-    email: string | null | undefined;
-    emailVerified: boolean | undefined;
-    isAnonymous: boolean | undefined;
-    tenantId: string | null | undefined;
-    providerInfo: {
-      providerId: string;
-      displayName: string | null;
-      email: string | null;
-      photoUrl: string | null;
-    }[];
-  }
-}
-
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData.map(provider => ({
-        providerId: provider.providerId,
-        displayName: provider.displayName,
-        email: provider.email,
-        photoUrl: provider.photoURL
-      })) || []
-    },
-    operationType,
-    path
-  }
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
-}
+const REGISTRATION_CODE = 'dedaloputo123!';
 
 interface ErrorBoundaryProps {
   children: React.ReactNode;
@@ -209,7 +159,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
       try {
         const parsed = JSON.parse(this.state.error.message);
         if (parsed.error) {
-          message = `Error de Firestore: ${parsed.error} (Operación: ${parsed.operationType})`;
+          message = `Error: ${parsed.error}`;
         }
       } catch (e) {
         message = this.state.error.message || String(this.state.error);
@@ -257,16 +207,17 @@ function AppContent() {
       setUser(u);
       if (u) {
         try {
-          const profileDoc = await getDoc(doc(db, 'users', u.uid));
-          if (profileDoc.exists()) {
-            const p = profileDoc.data() as UserProfile;
+          const userRef = ref(db, `users/${u.uid}`);
+          const snapshot = await get(userRef);
+          if (snapshot.exists()) {
+            const p = snapshot.val() as UserProfile;
             setProfile(p);
             setView('dashboard');
           } else {
             setView('username');
           }
         } catch (err) {
-          handleFirestoreError(err, OperationType.GET, `users/${u.uid}`);
+          console.error('Error loading profile:', err);
         }
       } else {
         setProfile(null);
@@ -298,10 +249,17 @@ function AppContent() {
           )}
           {view === 'username' && user && (
             <motion.div key="username" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
-              <UsernameView user={user} onComplete={(p) => { 
-                setProfile(p); 
-                setView('dashboard');
-              }} />
+              <UsernameView 
+                user={user} 
+                onComplete={(p) => { 
+                  setProfile(p); 
+                  setView('dashboard');
+                }} 
+                onCancel={() => {
+                  signOut(auth);
+                  setView('auth');
+                }}
+              />
             </motion.div>
           )}
           {view === 'dashboard' && profile && (
@@ -360,26 +318,53 @@ function AuthView() {
   const [password, setPassword] = useState('');
   const [isRegister, setIsRegister] = useState(false);
   const [error, setError] = useState('');
+  const [statusMessage, setStatusMessage] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
 
   const handleAuth = async () => {
     setError('');
+    setStatusMessage('');
+    setAuthLoading(true);
+
     try {
       if (isRegister) {
-        await createUserWithEmailAndPassword(auth, email, password);
+        const credential = await createUserWithEmailAndPassword(auth, email, password);
+        if (credential.user) {
+          await sendEmailVerification(credential.user);
+          await signOut(auth);
+          setStatusMessage('Se envió un email de verificación. Revisa tu bandeja y luego inicia sesión de nuevo.');
+          setIsRegister(false);
+          return;
+        }
       } else {
-        await signInWithEmailAndPassword(auth, email, password);
+        const credential = await signInWithEmailAndPassword(auth, email, password);
+        if (credential.user && !credential.user.emailVerified) {
+          await signOut(auth);
+          setError('Debes verificar tu email antes de iniciar sesión. Revisa tu bandeja y vuelve a intentarlo.');
+          return;
+        }
       }
     } catch (err: any) {
-      setError(err.message);
+      setError(err.message || 'Error en la autenticación.');
+    } finally {
+      setAuthLoading(false);
     }
   };
 
   const handleGoogle = async () => {
     setError('');
+    setStatusMessage('');
+    setAuthLoading(true);
     try {
-      await signInWithPopup(auth, googleProvider);
+      const result = await signInWithPopup(auth, googleProvider);
+      if (result.user && !result.user.emailVerified) {
+        await signOut(auth);
+        setError('Tu cuenta de Google no está verificada.');
+      }
     } catch (err: any) {
-      setError(err.message);
+      setError(err.message || 'Error al iniciar con Google.');
+    } finally {
+      setAuthLoading(false);
     }
   };
 
@@ -409,6 +394,16 @@ function AuthView() {
               {error}
             </motion.div>
           )}
+          {statusMessage && (
+            <motion.div 
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              className="bg-emerald-50 text-emerald-700 p-4 mb-6 rounded-2xl text-sm font-semibold border border-emerald-100 overflow-hidden"
+            >
+              {statusMessage}
+            </motion.div>
+          )}
         </AnimatePresence>
 
         <div className="space-y-4">
@@ -435,8 +430,16 @@ function AuthView() {
           
           <button 
             onClick={handleAuth} 
-            className="w-full bg-slate-900 text-white p-4 rounded-2xl font-bold text-lg shadow-lg shadow-slate-200 hover:bg-slate-800 transition-all mt-4"
+            disabled={authLoading}
+            className="w-full bg-slate-900 text-white p-4 rounded-2xl font-bold text-lg shadow-lg shadow-slate-200 hover:bg-slate-800 transition-all mt-4 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-3"
           >
+            {authLoading && (
+              <motion.div 
+                animate={{ rotate: 360 }}
+                transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+                className="w-5 h-5 border-2 border-white border-t-transparent rounded-full"
+              />
+            )}
             {isRegister ? 'Crear Cuenta' : 'Iniciar Sesión'}
           </button>
 
@@ -465,35 +468,61 @@ function AuthView() {
   );
 }
 
-function UsernameView({ user, onComplete }: { user: FirebaseUser, onComplete: (p: UserProfile) => void }) {
+function UsernameView({ user, onComplete, onCancel }: { user: FirebaseUser, onComplete: (p: UserProfile) => void, onCancel: () => void }) {
   const [username, setUsername] = useState('');
   const [inviteCode, setInviteCode] = useState('');
   const [error, setError] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
 
   const handleSave = async () => {
-    if (!username) return setError('El nickname es obligatorio');
-    
-    const requiredCode = import.meta.env.VITE_REGISTRATION_CODE;
-    if (requiredCode && inviteCode !== requiredCode) {
-      return setError('Código de invitación incorrecto');
+    setError('');
+    if (!username) {
+      setError('El nickname es obligatorio');
+      return;
+    }
+    if (!inviteCode) {
+      setError('La clave de registro es obligatoria');
+      return;
+    }
+    if (inviteCode !== REGISTRATION_CODE) {
+      setError('Código de registro incorrecto');
+      return;
     }
 
+    setIsSaving(true);
     try {
-      const q = query(collection(db, 'users'), where('username', '==', username));
-      const snap = await getDocs(q);
-      if (!snap.empty) return setError('El nickname ya está en uso');
+      // Check if username is already taken
+      const usersRef = ref(db, 'users');
+      const usernameQuery = query(usersRef, orderByChild('username'), equalTo(username));
+      const snapshot = await get(usernameQuery);
+      
+      if (snapshot.exists() && Object.keys(snapshot.val()).length > 0) {
+        setError('El nickname ya está en uso');
+        return;
+      }
 
       const profile: UserProfile = { uid: user.uid, email: user.email || '', username };
-      await setDoc(doc(db, 'users', user.uid), profile);
+      const userRef = ref(db, `users/${user.uid}`);
+      await set(userRef, profile);
       onComplete(profile);
     } catch (err: any) {
-      handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}`);
+      console.error('Error creating profile:', err);
+      setError('Error al crear la cuenta. Inténtalo de nuevo.');
+    } finally {
+      setIsSaving(false);
     }
   };
 
   return (
     <div className="max-w-md mx-auto mt-12">
-      <div className="text-center mb-10">
+      <div className="text-center mb-10 relative">
+        <button
+          onClick={onCancel}
+          className="absolute left-0 top-0 flex items-center gap-2 text-slate-400 hover:text-brand-600 font-bold transition-colors"
+        >
+          <ChevronLeft size={18} />
+          Volver
+        </button>
         <h2 className="text-3xl font-black text-slate-900 mb-2">Tu Identidad</h2>
         <p className="text-slate-500 font-medium">Elige cómo te verán otros jugadores.</p>
       </div>
@@ -517,24 +546,30 @@ function UsernameView({ user, onComplete }: { user: FirebaseUser, onComplete: (p
             <p className="text-[10px] text-slate-400 mt-3 ml-1 font-bold uppercase tracking-wider">Este nombre se usará para invitarte a partidas.</p>
           </div>
 
-          {import.meta.env.VITE_REGISTRATION_CODE && (
-            <div>
-              <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2 ml-1">Código de Invitación</label>
-              <input 
-                type="text" 
-                placeholder="Código secreto" 
-                className="w-full bg-slate-50 border-2 border-slate-100 p-4 rounded-2xl focus:border-brand-500 focus:ring-0 outline-none font-bold text-xl"
-                value={inviteCode}
-                onChange={(e) => setInviteCode(e.target.value)}
-              />
-              <p className="text-[10px] text-slate-400 mt-3 ml-1 font-bold uppercase tracking-wider">Pídele el código al administrador.</p>
-            </div>
-          )}
+          <div>
+            <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2 ml-1">Clave de Registro</label>
+            <input 
+              type="password" 
+              placeholder="Clave de registro" 
+              className="w-full bg-slate-50 border-2 border-slate-100 p-4 rounded-2xl focus:border-brand-500 focus:ring-0 outline-none font-bold text-xl"
+              value={inviteCode}
+              onChange={(e) => setInviteCode(e.target.value)}
+            />
+            <p className="text-[10px] text-slate-400 mt-3 ml-1 font-bold uppercase tracking-wider">Usa la clave de registro solicitada para completar tu cuenta.</p>
+          </div>
           
           <button 
             onClick={handleSave} 
-            className="w-full bg-brand-600 text-white p-4 rounded-2xl font-bold text-lg shadow-lg shadow-brand-100 hover:bg-brand-700 transition-all"
+            disabled={isSaving}
+            className="w-full bg-brand-600 text-white p-4 rounded-2xl font-bold text-lg shadow-lg shadow-brand-100 hover:bg-brand-700 transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-3"
           >
+            {isSaving && (
+              <motion.div 
+                animate={{ rotate: 360 }}
+                transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+                className="w-5 h-5 border-2 border-white border-t-transparent rounded-full"
+              />
+            )}
             Comenzar Aventura
           </button>
         </div>
@@ -552,13 +587,20 @@ function DashboardView({ profile, onOpenGame, onLogout }: { profile: UserProfile
   const isAdmin = profile.email === 'alexandertg.busse@gmail.com' && profile.username === 'alex';
 
   useEffect(() => {
-    const q = query(collection(db, 'games'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const allGames = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Game));
-      const filtered = allGames.filter(g => g.masterId === profile.uid || (g as any).players?.includes(profile.uid));
+    const gamesRef = ref(db, 'games');
+    const unsubscribe = onValue(gamesRef, (snapshot) => {
+      const allGames: Game[] = [];
+      if (snapshot.exists()) {
+        const data = snapshot.val();
+        Object.keys(data).forEach(key => {
+          allGames.push({ id: key, ...data[key] });
+        });
+      }
+      
+      const filtered = allGames.filter(g => g.masterId === profile.uid || (g.players && g.players.includes(profile.uid)));
       setGames(filtered.sort((a, b) => a.name.localeCompare(b.name)));
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'games');
+      console.error('Error loading games:', error);
     });
 
     return () => unsubscribe();
@@ -567,30 +609,42 @@ function DashboardView({ profile, onOpenGame, onLogout }: { profile: UserProfile
   const handleCreateGame = async () => {
     if (!newGameName.trim()) return;
     try {
-      const gameRef = await addDoc(collection(db, 'games'), {
+      const gamesRef = ref(db, 'games');
+      const newGameRef = push(gamesRef);
+      const gameData = {
         name: newGameName,
         masterId: profile.uid,
         players: [],
         createdAt: Date.now()
-      });
+      };
+      await set(newGameRef, gameData);
       setNewGameName('');
-      onOpenGame(gameRef.id);
+      onOpenGame(newGameRef.key!);
     } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, 'games');
+      console.error('Error creating game:', err);
     }
   };
 
   const handleDeleteGame = async (gameId: string) => {
     try {
-      const q = query(collection(db, 'sheets'), where('gameId', '==', gameId));
-      const snap = await getDocs(q);
-      for (const d of snap.docs) {
-        await deleteDoc(doc(db, 'sheets', d.id));
+      // Delete all sheets for this game
+      const sheetsRef = ref(db, 'sheets');
+      const sheetsQuery = query(sheetsRef, orderByChild('gameId'), equalTo(gameId));
+      const sheetsSnapshot = await get(sheetsQuery);
+      
+      if (sheetsSnapshot.exists()) {
+        const updates: { [key: string]: null } = {};
+        Object.keys(sheetsSnapshot.val()).forEach(sheetId => {
+          updates[`sheets/${sheetId}`] = null;
+        });
+        await update(ref(db), updates);
       }
-      await deleteDoc(doc(db, 'games', gameId));
+      
+      // Delete the game
+      await remove(ref(db, `games/${gameId}`));
       setConfirmDelete(null);
     } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, `games/${gameId}`);
+      console.error('Error deleting game:', err);
     }
   };
 
@@ -726,9 +780,17 @@ function AdminDashboard({ profile }: { profile: UserProfile }) {
   const [userToDelete, setUserToDelete] = useState<string | null>(null);
 
   useEffect(() => {
-    const q = query(collection(db, 'users'), orderBy('username'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      setUsers(snapshot.docs.map(d => d.data() as UserProfile));
+    const usersRef = ref(db, 'users');
+    const unsubscribe = onValue(usersRef, (snapshot) => {
+      const userList: UserProfile[] = [];
+      if (snapshot.exists()) {
+        const data = snapshot.val();
+        Object.keys(data).forEach(key => {
+          userList.push(data[key]);
+        });
+      }
+      // Sort by username since Realtime DB doesn't support orderBy
+      setUsers(userList.sort((a, b) => a.username.localeCompare(b.username)));
     });
     return () => unsubscribe();
   }, []);
@@ -736,10 +798,10 @@ function AdminDashboard({ profile }: { profile: UserProfile }) {
   const handleDeleteUser = async () => {
     if (!userToDelete) return;
     try {
-      await deleteDoc(doc(db, 'users', userToDelete));
+      await remove(ref(db, `users/${userToDelete}`));
       setUserToDelete(null);
     } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, `users/${userToDelete}`);
+      console.error('Error deleting user:', err);
     }
   };
 
@@ -753,20 +815,27 @@ function AdminDashboard({ profile }: { profile: UserProfile }) {
         { uid: 'test_player_2', username: 'Brog_Enano', email: 'p2@test.com' },
       ];
 
-      for (const u of testUsers) {
-        await setDoc(doc(db, 'users', u.uid), u);
-      }
+      // Create test users
+      const userUpdates: { [key: string]: any } = {};
+      testUsers.forEach(u => {
+        userUpdates[`users/${u.uid}`] = u;
+      });
+      await update(ref(db), userUpdates);
 
-      const gameRef = await addDoc(collection(db, 'games'), {
+      // Create test game
+      const gamesRef = ref(db, 'games');
+      const newGameRef = push(gamesRef);
+      const gameData = {
         name: 'El Despertar del Vacío',
         masterId: 'test_gm_1',
         players: [profile.uid, 'test_player_1', 'test_player_2'],
         createdAt: Date.now()
-      });
+      };
+      await set(newGameRef, gameData);
 
       const sheets = [
         {
-          gameId: gameRef.id,
+          gameId: newGameRef.key!,
           playerId: 'test_player_1',
           type: 'player',
           visible: true,
@@ -781,7 +850,7 @@ function AdminDashboard({ profile }: { profile: UserProfile }) {
           createdAt: Date.now()
         },
         {
-          gameId: gameRef.id,
+          gameId: newGameRef.key!,
           playerId: 'test_player_2',
           type: 'player',
           visible: true,
@@ -797,9 +866,13 @@ function AdminDashboard({ profile }: { profile: UserProfile }) {
         }
       ];
 
-      for (const s of sheets) {
-        await addDoc(collection(db, 'sheets'), s);
-      }
+      // Create test sheets
+      const sheetUpdates: { [key: string]: any } = {};
+      sheets.forEach(sheet => {
+        const sheetRef = push(ref(db, 'sheets'));
+        sheetUpdates[`sheets/${sheetRef.key}`] = { ...sheet, id: sheetRef.key };
+      });
+      await update(ref(db), sheetUpdates);
 
       setStatus('¡Escenario generado!');
       setTimeout(() => setStatus(''), 3000);
@@ -886,49 +959,64 @@ function InvitedGames({ profile, onOpenGame }: { profile: UserProfile, onOpenGam
   const [confirmLeave, setConfirmLeave] = useState<string | null>(null);
 
   useEffect(() => {
-    const q = query(collection(db, 'sheets'), where('playerId', '==', profile.uid));
-    const unsubscribe = onSnapshot(q, async (snapshot) => {
-      const gameIds = Array.from(new Set(snapshot.docs.map(d => d.data().gameId)));
-      if (gameIds.length === 0) {
-        setGames([]);
-        return;
+    const sheetsRef = ref(db, 'sheets');
+    const sheetsQuery = query(sheetsRef, orderByChild('playerId'), equalTo(profile.uid));
+    const unsubscribe = onValue(sheetsQuery, async (snapshot) => {
+      const gameIds = new Set<string>();
+      if (snapshot.exists()) {
+        const data = snapshot.val();
+        Object.values(data).forEach((sheet: any) => {
+          gameIds.add(sheet.gameId);
+        });
       }
       
       const gamesList: Game[] = [];
       for (const id of gameIds) {
         try {
-          const gDoc = await getDoc(doc(db, 'games', id));
-          if (gDoc.exists()) {
-            gamesList.push({ id: gDoc.id, ...gDoc.data() } as Game);
+          const gameSnapshot = await get(ref(db, `games/${id}`));
+          if (gameSnapshot.exists()) {
+            gamesList.push({ id: gameSnapshot.key!, ...gameSnapshot.val() });
           }
         } catch (err) {
-          handleFirestoreError(err, OperationType.GET, `games/${id}`);
+          console.error('Error loading game:', err);
         }
       }
       setGames(gamesList.filter(g => g.masterId !== profile.uid));
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'sheets');
+      console.error('Error loading invited games:', error);
     });
     return () => unsubscribe();
   }, [profile.uid]);
 
   const handleLeaveGame = async (gameId: string) => {
     try {
-      const q = query(collection(db, 'sheets'), where('gameId', '==', gameId), where('playerId', '==', profile.uid));
-      const snap = await getDocs(q);
-      for (const d of snap.docs) {
-        await deleteDoc(doc(db, 'sheets', d.id));
+      // Delete all sheets for this player in this game
+      const sheetsRef = ref(db, 'sheets');
+      const sheetsQuery = query(sheetsRef, orderByChild('gameId'), equalTo(gameId));
+      const sheetsSnapshot = await get(sheetsQuery);
+      
+      if (sheetsSnapshot.exists()) {
+        const updates: { [key: string]: null } = {};
+        const data = sheetsSnapshot.val();
+        Object.keys(data).forEach(sheetId => {
+          if (data[sheetId].playerId === profile.uid) {
+            updates[`sheets/${sheetId}`] = null;
+          }
+        });
+        await update(ref(db), updates);
       }
-      const gameRef = doc(db, 'games', gameId);
-      const gDoc = await getDoc(gameRef);
-      if (gDoc.exists()) {
-        const currentPlayers = gDoc.data().players || [];
+      
+      // Remove player from game
+      const gameRef = ref(db, `games/${gameId}`);
+      const gameSnapshot = await get(gameRef);
+      if (gameSnapshot.exists()) {
+        const currentPlayers = gameSnapshot.val().players || [];
         const newPlayers = currentPlayers.filter((uid: string) => uid !== profile.uid);
-        await updateDoc(gameRef, { players: newPlayers });
+        await update(gameRef, { players: newPlayers });
       }
       setConfirmLeave(null);
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `games/${gameId}`);
+      console.error('Error leaving game:', err);
     }
   };
 
@@ -1054,19 +1142,28 @@ function GameView({ profile, gameId, onBack }: { profile: UserProfile, gameId: s
   const [assignToPlayerId, setAssignToPlayerId] = useState<string | null>(null);
 
   useEffect(() => {
-    const gameRef = doc(db, 'games', gameId);
-    const unsubscribeGame = onSnapshot(gameRef, (d) => {
-      if (d.exists()) setGame({ id: d.id, ...d.data() } as Game);
+    const gameRef = ref(db, `games/${gameId}`);
+    const unsubscribeGame = onValue(gameRef, (snapshot) => {
+      if (snapshot.exists()) {
+        setGame({ id: snapshot.key!, ...snapshot.val() } as Game);
+      }
     }, (error) => {
-      handleFirestoreError(error, OperationType.GET, `games/${gameId}`);
+      console.error('Error loading game:', error);
     });
 
-    const q = query(collection(db, 'sheets'), where('gameId', '==', gameId));
-    const unsubscribeSheets = onSnapshot(q, (snapshot) => {
-      const docs = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Sheet));
+    const sheetsRef = ref(db, 'sheets');
+    const sheetsQuery = query(sheetsRef, orderByChild('gameId'), equalTo(gameId));
+    const unsubscribeSheets = onValue(sheetsQuery, (snapshot) => {
+      const docs: Sheet[] = [];
+      if (snapshot.exists()) {
+        const data = snapshot.val();
+        Object.keys(data).forEach(key => {
+          docs.push({ id: key, ...data[key] });
+        });
+      }
       setSheets(docs.sort((a, b) => (a.header?.name || '').localeCompare(b.header?.name || '')));
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'sheets');
+      console.error('Error loading sheets:', error);
     });
 
     return () => {
@@ -1078,46 +1175,41 @@ function GameView({ profile, gameId, onBack }: { profile: UserProfile, gameId: s
   const handleInvite = async () => {
     if (!inviteName) return;
     try {
-      const q = query(collection(db, 'users'), where('username', '==', inviteName), limit(1));
-      let snap;
-      try {
-        snap = await getDocs(q);
-      } catch (err) {
-        handleFirestoreError(err, OperationType.LIST, 'users');
-      }
-      if (!snap || snap.empty) return setError('Usuario no encontrado');
+      const usersRef = ref(db, 'users');
+      const usernameQuery = query(usersRef, orderByChild('username'), equalTo(inviteName), limitToFirst(1));
+      const snapshot = await get(usernameQuery);
       
-      const playerData = snap.docs[0].data() as UserProfile;
-      
-      // Update game players list (optional but good for tracking)
-      const gameRef = doc(db, 'games', gameId);
-      let gDoc;
-      try {
-        gDoc = await getDoc(gameRef);
-      } catch (err) {
-        handleFirestoreError(err, OperationType.GET, `games/${gameId}`);
+      if (!snapshot.exists() || Object.keys(snapshot.val()).length === 0) {
+        return setError('Usuario no encontrado');
       }
-      if (gDoc.exists()) {
-        const currentPlayers = gDoc.data().players || [];
+      
+      const userId = Object.keys(snapshot.val())[0];
+      const playerData = snapshot.val()[userId] as UserProfile;
+      
+      // Update game players list
+      const gameRef = ref(db, `games/${gameId}`);
+      const gameSnapshot = await get(gameRef);
+      if (gameSnapshot.exists()) {
+        const currentPlayers = gameSnapshot.val().players || [];
         if (!currentPlayers.includes(playerData.uid)) {
-          try {
-            await updateDoc(gameRef, { players: [...currentPlayers, playerData.uid] });
-          } catch (err) {
-            handleFirestoreError(err, OperationType.WRITE, `games/${gameId}`);
-          }
+          await update(gameRef, { players: [...currentPlayers, playerData.uid] });
         }
       }
 
       setInviteName('');
       setError('');
     } catch (err: any) {
-      setError(err.message);
+      console.error('Error inviting user:', err);
+      setError('Error al invitar usuario');
     }
   };
 
   const createCharacter = async (classId: string, assignedId: string | null) => {
     try {
-      const newSheet: Partial<Sheet> = {
+      const sheetsRef = ref(db, 'sheets');
+      const newSheetRef = push(sheetsRef);
+      const newSheet: Sheet = {
+        id: newSheetRef.key!,
         gameId,
         playerId: creationType === 'player' ? (assignedId || profile.uid) : null,
         type: creationType,
@@ -1132,30 +1224,30 @@ function GameView({ profile, gameId, onBack }: { profile: UserProfile, gameId: s
         notes: '',
         createdAt: Date.now()
       };
-      const docRef = await addDoc(collection(db, 'sheets'), newSheet);
-      setSelectedSheetId(docRef.id);
+      await set(newSheetRef, newSheet);
+      setSelectedSheetId(newSheetRef.key!);
       setShowCreationModal(false);
     } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, 'sheets');
+      console.error('Error creating character:', err);
     }
   };
 
   const deleteSheet = async (id: string) => {
     try {
-      await deleteDoc(doc(db, 'sheets', id));
+      await remove(ref(db, `sheets/${id}`));
       setSelectedSheetId(null);
       setShowDeleteConfirm(null);
     } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, `sheets/${id}`);
+      console.error('Error deleting sheet:', err);
     }
   };
 
   const toggleVisibility = async (e: React.MouseEvent, sheetId: string, current: boolean) => {
     e.stopPropagation();
     try {
-      await updateDoc(doc(db, 'sheets', sheetId), { visible: !current });
+      await update(ref(db, `sheets/${sheetId}`), { visible: !current });
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `sheets/${sheetId}`);
+      console.error('Error toggling visibility:', err);
     }
   };
 
@@ -1412,24 +1504,24 @@ function CharacterCreationModal({ onClose, onSelect, type, gameId }: { onClose: 
     if (type === 'player') {
       const fetchPlayers = async () => {
         try {
-          const gDoc = await getDoc(doc(db, 'games', gameId));
-          if (gDoc.exists()) {
-            const uids = gDoc.data().players || [];
+          const gameSnapshot = await get(ref(db, `games/${gameId}`));
+          if (gameSnapshot.exists()) {
+            const uids = gameSnapshot.val().players || [];
             const playerList = [];
             for (const uid of uids) {
               try {
-                const uDoc = await getDoc(doc(db, 'users', uid));
-                if (uDoc.exists()) {
-                  playerList.push({ uid, username: uDoc.data().username });
+                const userSnapshot = await get(ref(db, `users/${uid}`));
+                if (userSnapshot.exists()) {
+                  playerList.push({ uid, username: userSnapshot.val().username });
                 }
               } catch (err) {
-                handleFirestoreError(err, OperationType.GET, `users/${uid}`);
+                console.error('Error fetching user:', err);
               }
             }
             setPlayers(playerList);
           }
         } catch (err) {
-          handleFirestoreError(err, OperationType.GET, `games/${gameId}`);
+          console.error('Error fetching game:', err);
         }
       };
       fetchPlayers();
@@ -1523,13 +1615,13 @@ function CharacterSheet({ sheet, isMaster, onBack, onDelete, gameId }: { sheet: 
     if (isMaster) {
       const fetchPlayers = async () => {
         try {
-          const gDoc = await getDoc(doc(db, 'games', gameId));
-          if (gDoc.exists()) {
-            const uids = gDoc.data().players || [];
+          const gameSnapshot = await get(ref(db, `games/${gameId}`));
+          if (gameSnapshot.exists()) {
+            const uids = gameSnapshot.val().players || [];
             const playerList = [];
             for (const uid of uids) {
-              const uDoc = await getDoc(doc(db, 'users', uid));
-              if (uDoc.exists()) playerList.push({ uid, username: uDoc.data().username });
+              const userSnapshot = await get(ref(db, `users/${uid}`));
+              if (userSnapshot.exists()) playerList.push({ uid, username: userSnapshot.val().username });
             }
             setPlayers(playerList);
           }
@@ -1553,9 +1645,9 @@ function CharacterSheet({ sheet, isMaster, onBack, onDelete, gameId }: { sheet: 
     setData(newData);
 
     try {
-      await updateDoc(doc(db, 'sheets', sheet.id), { [path]: value });
+      await set(ref(db, `sheets/${sheet.id}`), newData);
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `sheets/${sheet.id}`);
+      console.error('Error updating sheet:', err);
     }
   };
 
