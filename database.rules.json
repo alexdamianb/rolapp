@@ -1,15 +1,33 @@
 {
   "rules": {
-    ".read": true,
-    ".write": true,
+    ".read": false,
+    ".write": false,
+
     "users": {
-      ".indexOn": ["username"]
+      ".read": "auth != null",
+      ".indexOn": ["username"],
+      "$uid": {
+        ".write": "auth != null && auth.uid === $uid"
+      }
     },
+
     "games": {
-      ".indexOn": ["gameId"]
+      ".read": "auth != null",
+      "$gameId": {
+        ".write": "auth != null && ((!data.exists() && newData.child('masterId').val() === auth.uid) || (data.exists() && data.child('masterId').val() === auth.uid))"
+      }
     },
-    "sheets": {
-      ".indexOn": ["gameId"]
+
+"gameSheets": {
+  "$gameId": {
+    ".read": "auth != null && (root.child('games').child($gameId).child('masterId').val() === auth.uid || root.child('games').child($gameId).child('players').hasChild(auth.uid))",
+
+    ".write": "auth != null && root.child('games').child($gameId).child('masterId').val() === auth.uid",
+
+    "$sheetId": {
+      ".write": "auth != null && (root.child('games').child($gameId).child('masterId').val() === auth.uid || (data.exists() && data.child('type').val() === 'player' && data.child('playerId').val() === auth.uid) || (!data.exists() && newData.child('type').val() === 'player' && newData.child('playerId').val() === auth.uid))"
     }
+  }
+}
   }
 }
